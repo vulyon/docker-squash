@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import tarfile
 from logging import Logger
 from typing import Optional
 
@@ -46,15 +47,39 @@ class Squash(object):
             self.cleanup = False
         if tmp_dir:
             self.development = True
-        if not docker:
+
+        # Check if image is a tar file
+        self.is_tar_input = self._is_tar_file(image)
+
+        if not docker and not self.is_tar_input:
             self.docker = common.docker_client(self.log)
 
+    def _is_tar_file(self, image_path):
+        """Check if the provided image path is a tar file"""
+        if not isinstance(image_path, str):
+            return False
+
+        # Check if it's a file path that exists and has tar extension or is a valid tar file
+        if os.path.exists(image_path):
+            if image_path.endswith((".tar", ".tar.gz", ".tgz")):
+                return True
+            # Try to open as tar file to verify
+            try:
+                with tarfile.open(image_path, "r"):
+                    return True
+            except (tarfile.TarError, OSError):
+                return False
+        return False
+
     def run(self):
-        docker_version = self.docker.version()
-        self.log.info(
-            "docker-squash version %s, Docker %s, API %s..."
-            % (version, docker_version["Version"], docker_version["ApiVersion"])
-        )
+        if self.is_tar_input:
+            self.log.info("docker-squash version %s, processing tar file..." % version)
+        else:
+            docker_version = self.docker.version()
+            self.log.info(
+                "docker-squash version %s, Docker %s, API %s..."
+                % (version, docker_version["Version"], docker_version["ApiVersion"])
+            )
 
         if self.image is None:
             raise SquashError("Image is not provided")
@@ -71,7 +96,18 @@ class Squash(object):
                 % self.output_path
             )
 
-        if packaging_version.parse(
+        if self.is_tar_input:
+            # For tar input, always use V2Image (it now supports tar)
+            image: Image = V2Image(
+                self.log,
+                self.docker,
+                self.image,
+                self.from_layer,
+                self.tmp_dir,
+                self.tag,
+                self.comment,
+            )
+        elif packaging_version.parse(
             docker_version["ApiVersion"]
         ) >= packaging_version.parse("1.22"):
             image: Image = V2Image(
